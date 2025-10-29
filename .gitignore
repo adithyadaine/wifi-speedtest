@@ -1,0 +1,12 @@
+# Vercel
+.vercel
+
+# macOS
+.DS_Store
+
+# Editor directories
+.vscode/
+.idea/
+
+# Node modules (if you add any build tools later)
+node_modules/

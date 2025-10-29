@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Test your WiFi connection speed">
+    <title>WiFi Speed Test</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>WiFi Speed Test</h1>
+        <p class="subtitle">Test your internet connection speed</p>
+        
+        <button class="test-button" id="startButton">
+            Start Test
+        </button>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress"></div>
+            </div>
+            <p class="status-text" id="status">Preparing test...</p>
+        </div>
+        
+        <div class="error" id="error"></div>
+        
+        <div class="results" id="results">
+            <div class="result-item">
+                <span class="result-label">Latency</span>
+                <span class="result-value">
+                    <span id="ping">--</span>
+                    <span>ms</span>
+                </span>
+            </div>
+            <div class="result-item">
+                <span class="result-label">Download</span>
+                <span class="result-value">
+                    <span id="download">--</span>
+                    <span>Mbps</span>
+                </span>
+            </div>
+            <div class="result-item">
+                <span class="result-label">Upload</span>
+                <span class="result-value">
+                    <span id="upload">--</span>
+                    <span>Mbps</span>
+                </span>
+            </div>
+        </div>
+    </div>
+    
+    <script src="js/speedtest.js"></script>
+</body>
+</html>
