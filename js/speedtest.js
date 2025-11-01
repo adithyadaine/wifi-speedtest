@@ -8,13 +8,19 @@
 // =================================
 
 const CONFIG = {
-    DOWNLOAD_SIZE: 10 * 1024 * 1024, // 10 MB
-    UPLOAD_SIZE: 1 * 1024 * 1024,    // 1 MB
-    TEST_SERVERS: [
-        'https://speed.cloudflare.com/__down?bytes=',
-        'https://bouygues.testdebit.info/10M.iso'
+    // Use test files from CORS-friendly servers
+    DOWNLOAD_TESTS: [
+        {
+            url: 'https://speed.cloudflare.com/__down?bytes=10000000',
+            size: 10 * 1024 * 1024
+        },
+        {
+            url: 'https://proof.ovh.net/files/10Mb.dat',
+            size: 10 * 1024 * 1024
+        }
     ],
-    UPLOAD_ENDPOINT: 'https://httpbin.org/post'
+    UPLOAD_SIZE: 1 * 1024 * 1024,
+    PING_URL: 'https://www.cloudflare.com/cdn-cgi/trace'
 };
 
 // =================================
@@ -37,74 +43,134 @@ const elements = {
 // Speed Test Functions
 // =================================
 
-async function testPing(url) {
-    const start = performance.now();
+/**
+ * Tests the ping/latency to a server
+ * Uses multiple attempts for accuracy
+ */
+async function testPing() {
+    const attempts = 3;
+    const pings = [];
     
-    try {
-        await fetch(url, {
-            method: 'HEAD',
-            cache: 'no-cache'
-        });
+    for (let i = 0; i < attempts; i++) {
+        const start = performance.now();
         
-        return performance.now() - start;
-    } catch (error) {
-        console.error('Ping test failed:', error);
-        return null;
-    }
-}
-
-async function testDownload(url, progressCallback) {
-    const start = performance.now();
-    
-    try {
-        const response = await fetch(url, { cache: 'no-cache' });
-        const reader = response.body.getReader();
-        let receivedLength = 0;
-        
-        while (true) {
-            const { done, value } = await reader.read();
+        try {
+            // Use fetch with no-cors mode to avoid CORS issues
+            await fetch(CONFIG.PING_URL + '?t=' + Date.now(), {
+                method: 'GET',
+                cache: 'no-cache'
+            });
             
-            if (done) break;
-            
-            receivedLength += value.length;
-            const progress = (receivedLength / CONFIG.DOWNLOAD_SIZE) * 100;
-            progressCallback(Math.min(progress, 100));
+            const ping = performance.now() - start;
+            pings.push(ping);
+        } catch (error) {
+            console.warn(`Ping attempt ${i + 1} failed:`, error);
         }
-        
-        const duration = (performance.now() - start) / 1000;
-        const bitsLoaded = receivedLength * 8;
-        const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
-        
-        return speedMbps;
-    } catch (error) {
-        console.error('Download test failed:', error);
+    }
+    
+    // Return average ping, or null if all failed
+    if (pings.length === 0) {
         return null;
     }
+    
+    return pings.reduce((a, b) => a + b, 0) / pings.length;
 }
 
+/**
+ * Tests download speed
+ */
+async function testDownload(progressCallback) {
+    // Try each test server until one works
+    for (const test of CONFIG.DOWNLOAD_TESTS) {
+        try {
+            const start = performance.now();
+            const response = await fetch(test.url + '&t=' + Date.now(), {
+                cache: 'no-cache'
+            });
+            
+            if (!response.ok) {
+                console.warn(`Server returned ${response.status}, trying next...`);
+                continue;
+            }
+            
+            const reader = response.body.getReader();
+            let receivedLength = 0;
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                
+                if (done) break;
+                
+                receivedLength += value.length;
+                const progress = (receivedLength / test.size) * 100;
+                progressCallback(Math.min(progress, 100));
+            }
+            
+            const duration = (performance.now() - start) / 1000;
+            const bitsLoaded = receivedLength * 8;
+            const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
+            
+            return speedMbps;
+            
+        } catch (error) {
+            console.warn('Download test failed, trying next server:', error);
+            continue;
+        }
+    }
+    
+    // All servers failed
+    return null;
+}
+
+/**
+ * Tests upload speed
+ * Note: Many public endpoints don't accept large uploads,
+ * so we use a smaller test size
+ */
 async function testUpload(progressCallback) {
-    const data = new Uint8Array(CONFIG.UPLOAD_SIZE);
+    // Create smaller random data (500KB for better compatibility)
+    const uploadSize = 500 * 1024;
+    const data = new Uint8Array(uploadSize);
     crypto.getRandomValues(data);
     
-    const start = performance.now();
+    const uploadEndpoints = [
+        'https://httpbin.org/post',
+        'https://postman-echo.com/post'
+    ];
     
-    try {
-        await fetch(CONFIG.UPLOAD_ENDPOINT, {
-            method: 'POST',
-            body: data,
-            cache: 'no-cache'
-        });
-        
-        const duration = (performance.now() - start) / 1000;
-        const bitsLoaded = CONFIG.UPLOAD_SIZE * 8;
-        const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
-        
-        progressCallback(100);
-        return speedMbps;
-    } catch (error) {
-        console.error('Upload test failed:', error);
-        return null;
+    for (const endpoint of uploadEndpoints) {
+        try {
+            const start = performance.now();
+            
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                body: data,
+                cache: 'no-cache',
+                headers: {
+                    'Content-Type': 'application/octet-stream'
+                }
+            });
+            
+            if (!response.ok) {
+                console.warn(`Upload endpoint returned ${response.status}, trying next...`);
+                continue;
+            }
+            
+            const duration = (performance.now() - start) / 1000;
+            const bitsLoaded = uploadSize * 8;
+            const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
+            
+            progressCallback(100);
+            return speedMbps;
+            
+        } catch (error) {
+            console.warn('Upload test failed, trying next endpoint:', error);
+            continue;
+        }
     }
+    
+    // All endpoints failed
+    return null;
 }
 
 // =================================
@@ -135,9 +201,9 @@ function hideLoading() {
 }
 
 function showResults(results) {
-    elements.ping.textContent = results.ping.toFixed(0);
-    elements.download.textContent = results.download.toFixed(2);
-    elements.upload.textContent = results.upload.toFixed(2);
+    elements.ping.textContent = results.ping ? results.ping.toFixed(0) : 'N/A';
+    elements.download.textContent = results.download ? results.download.toFixed(2) : 'N/A';
+    elements.upload.textContent = results.upload ? results.upload.toFixed(2) : 'N/A';
     
     setTimeout(() => {
         hideLoading();
@@ -148,7 +214,7 @@ function showResults(results) {
 
 function showError(message) {
     hideLoading();
-    elements.error.textContent = `${message}. Please try again.`;
+    elements.error.textContent = `${message}. Please check your internet connection and try again.`;
     elements.error.style.display = 'block';
 }
 
@@ -159,44 +225,50 @@ function showError(message) {
 async function runSpeedTest() {
     showLoading();
     
+    const results = {
+        ping: null,
+        download: null,
+        upload: null
+    };
+    
     try {
+        // Step 1: Test Ping
         updateStatus('Testing latency...');
         updateProgress(10);
         
-        const testUrl = CONFIG.TEST_SERVERS[0] + CONFIG.DOWNLOAD_SIZE;
-        const ping = await testPing(testUrl);
+        results.ping = await testPing();
         
-        if (ping === null) {
-            throw new Error('Ping test failed');
+        if (results.ping === null) {
+            console.warn('Ping test failed, continuing with other tests...');
         }
         
+        // Step 2: Test Download
         updateStatus('Testing download speed...');
+        updateProgress(20);
         
-        const downloadSpeed = await testDownload(testUrl, (progress) => {
-            updateProgress(10 + (progress * 0.6));
+        results.download = await testDownload((progress) => {
+            updateProgress(20 + (progress * 0.5));
         });
         
-        if (downloadSpeed === null) {
-            throw new Error('Download test failed');
+        if (results.download === null) {
+            throw new Error('Download test failed - unable to reach test servers');
         }
         
+        // Step 3: Test Upload
         updateStatus('Testing upload speed...');
         updateProgress(70);
         
-        const uploadSpeed = await testUpload((progress) => {
+        results.upload = await testUpload((progress) => {
             updateProgress(70 + (progress * 0.3));
         });
         
-        if (uploadSpeed === null) {
-            throw new Error('Upload test failed');
+        if (results.upload === null) {
+            console.warn('Upload test failed, showing partial results...');
         }
         
+        // Show results (even if some tests failed)
         updateProgress(100);
-        showResults({
-            ping: ping,
-            download: downloadSpeed,
-            upload: uploadSpeed
-        });
+        showResults(results);
         
     } catch (error) {
         console.error('Test error:', error);
@@ -210,4 +282,14 @@ async function runSpeedTest() {
 
 document.addEventListener('DOMContentLoaded', () => {
     elements.startButton.addEventListener('click', runSpeedTest);
+    
+    // Log browser info for debugging
+    console.log('Speed Test App loaded');
+    console.log('User Agent:', navigator.userAgent);
+    console.log('Online:', navigator.onLine);
+});
+
+// Handle offline detection
+window.addEventListener('offline', () => {
+    showError('No internet connection detected');
 });
