@@ -12,15 +12,16 @@ const CONFIG = {
     DOWNLOAD_TESTS: [
         {
             url: 'https://speed.cloudflare.com/__down?bytes=10000000',
-            size: 10 * 1024 * 1024
+            size: 10 * 1024 * 1024 // 10 MB
         },
         {
             url: 'https://proof.ovh.net/files/10Mb.dat',
-            size: 10 * 1024 * 1024
+            size: 10 * 1024 * 1024 // 10 MB
         }
     ],
-    UPLOAD_SIZE: 500 * 1024, // 500KB
-    MAX_RANDOM_BYTES: 65536   // Browser crypto limit
+    // Reduced upload size to fit browser's crypto.getRandomValues limit
+    // Max recommended is 65536 bytes (64KB). Let's use that.
+    UPLOAD_SIZE: 64 * 1024 // 64 KB
 };
 
 // =================================
@@ -40,32 +41,6 @@ const elements = {
 };
 
 // =================================
-// Helper Functions
-// =================================
-
-/**
- * Generates random data in chunks to avoid crypto API limits
- * @param {number} totalSize - Total size in bytes
- * @returns {Uint8Array} Random data
- */
-function generateRandomData(totalSize) {
-    const chunks = Math.ceil(totalSize / CONFIG.MAX_RANDOM_BYTES);
-    const result = new Uint8Array(totalSize);
-    
-    for (let i = 0; i < chunks; i++) {
-        const chunkSize = Math.min(
-            CONFIG.MAX_RANDOM_BYTES,
-            totalSize - (i * CONFIG.MAX_RANDOM_BYTES)
-        );
-        const chunk = new Uint8Array(chunkSize);
-        crypto.getRandomValues(chunk);
-        result.set(chunk, i * CONFIG.MAX_RANDOM_BYTES);
-    }
-    
-    return result;
-}
-
-// =================================
 // Speed Test Functions
 // =================================
 
@@ -81,6 +56,7 @@ async function testPing() {
         const start = performance.now();
         
         try {
+            // Use fetch with a unique query param to prevent caching
             await fetch('https://www.cloudflare.com/cdn-cgi/trace?t=' + Date.now(), {
                 method: 'GET',
                 cache: 'no-cache'
@@ -93,6 +69,7 @@ async function testPing() {
         }
     }
     
+    // Return average ping, or null if all failed
     if (pings.length === 0) {
         return null;
     }
@@ -104,15 +81,17 @@ async function testPing() {
  * Tests download speed
  */
 async function testDownload(progressCallback) {
+    // Try each test server until one works
     for (const test of CONFIG.DOWNLOAD_TESTS) {
         try {
             const start = performance.now();
+            // Add unique query param to prevent caching
             const response = await fetch(test.url + '&t=' + Date.now(), {
                 cache: 'no-cache'
             });
             
             if (!response.ok) {
-                console.warn(`Server returned ${response.status}, trying next...`);
+                console.warn(`Server returned ${response.status} for ${test.url}, trying next...`);
                 continue;
             }
             
@@ -136,64 +115,64 @@ async function testDownload(progressCallback) {
             return speedMbps;
             
         } catch (error) {
-            console.warn('Download test failed, trying next server:', error);
+            console.warn(`Download test failed for ${test.url}, trying next server:`, error);
             continue;
         }
     }
     
+    // All servers failed
     return null;
 }
 
 /**
- * Tests upload speed using generated random data
+ * Tests upload speed using generated random data (within crypto limits)
  */
 async function testUpload(progressCallback) {
+    // Use a smaller size that fits the crypto.getRandomValues limit
+    const data = new Uint8Array(CONFIG.UPLOAD_SIZE);
+    crypto.getRandomValues(data); // This should now work without error
+    
     const uploadEndpoints = [
         'https://httpbin.org/post',
         'https://postman-echo.com/post'
     ];
     
-    try {
-        // Generate random data in chunks
-        updateStatus('Preparing upload test...');
-        const data = generateRandomData(CONFIG.UPLOAD_SIZE);
-        
-        for (const endpoint of uploadEndpoints) {
-            try {
-                updateStatus('Testing upload speed...');
-                const start = performance.now();
-                
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    body: data,
-                    cache: 'no-cache',
-                    headers: {
-                        'Content-Type': 'application/octet-stream'
-                    }
-                });
-                
-                if (!response.ok) {
-                    console.warn(`Upload endpoint returned ${response.status}`);
-                    continue;
+    for (const endpoint of uploadEndpoints) {
+        try {
+            const start = performance.now();
+            
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                body: data,
+                cache: 'no-cache',
+                headers: {
+                    'Content-Type': 'application/octet-stream'
                 }
-                
-                const duration = (performance.now() - start) / 1000;
-                const bitsLoaded = CONFIG.UPLOAD_SIZE * 8;
-                const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
-                
-                progressCallback(100);
-                return speedMbps;
-                
-            } catch (error) {
-                console.warn('Upload test failed, trying next endpoint:', error);
+            });
+            
+            if (!response.ok) {
+                console.warn(`Upload endpoint returned ${response.status} for ${endpoint}, trying next...`);
                 continue;
             }
+            
+            // For a basic test, we don't need to read the response body for upload
+            // const responseBody = await response.json(); 
+            // console.log('Upload response:', responseBody);
+            
+            const duration = (performance.now() - start) / 1000;
+            const bitsLoaded = CONFIG.UPLOAD_SIZE * 8;
+            const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
+            
+            progressCallback(100);
+            return speedMbps;
+            
+        } catch (error) {
+            console.warn(`Upload test failed for ${endpoint}, trying next endpoint:`, error);
+            continue;
         }
-        
-    } catch (error) {
-        console.error('Upload test preparation failed:', error);
     }
     
+    // All endpoints failed
     return null;
 }
 
@@ -279,6 +258,7 @@ async function runSpeedTest() {
         }
         
         // Step 3: Test Upload
+        updateStatus('Testing upload speed...');
         updateProgress(70);
         
         results.upload = await testUpload((progress) => {
@@ -286,6 +266,8 @@ async function runSpeedTest() {
         });
         
         if (results.upload === null) {
+            // Upload can sometimes be tricky or blocked by firewalls more easily.
+            // We'll show partial results if it fails, but not throw a full error.
             console.warn('Upload test failed, showing partial results...');
         }
         
