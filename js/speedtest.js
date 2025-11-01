@@ -19,8 +19,8 @@ const CONFIG = {
             size: 10 * 1024 * 1024
         }
     ],
-    UPLOAD_SIZE: 1 * 1024 * 1024,
-    PING_URL: 'https://www.cloudflare.com/cdn-cgi/trace'
+    UPLOAD_SIZE: 500 * 1024, // 500KB
+    MAX_RANDOM_BYTES: 65536   // Browser crypto limit
 };
 
 // =================================
@@ -40,6 +40,32 @@ const elements = {
 };
 
 // =================================
+// Helper Functions
+// =================================
+
+/**
+ * Generates random data in chunks to avoid crypto API limits
+ * @param {number} totalSize - Total size in bytes
+ * @returns {Uint8Array} Random data
+ */
+function generateRandomData(totalSize) {
+    const chunks = Math.ceil(totalSize / CONFIG.MAX_RANDOM_BYTES);
+    const result = new Uint8Array(totalSize);
+    
+    for (let i = 0; i < chunks; i++) {
+        const chunkSize = Math.min(
+            CONFIG.MAX_RANDOM_BYTES,
+            totalSize - (i * CONFIG.MAX_RANDOM_BYTES)
+        );
+        const chunk = new Uint8Array(chunkSize);
+        crypto.getRandomValues(chunk);
+        result.set(chunk, i * CONFIG.MAX_RANDOM_BYTES);
+    }
+    
+    return result;
+}
+
+// =================================
 // Speed Test Functions
 // =================================
 
@@ -55,8 +81,7 @@ async function testPing() {
         const start = performance.now();
         
         try {
-            // Use fetch with no-cors mode to avoid CORS issues
-            await fetch(CONFIG.PING_URL + '?t=' + Date.now(), {
+            await fetch('https://www.cloudflare.com/cdn-cgi/trace?t=' + Date.now(), {
                 method: 'GET',
                 cache: 'no-cache'
             });
@@ -68,7 +93,6 @@ async function testPing() {
         }
     }
     
-    // Return average ping, or null if all failed
     if (pings.length === 0) {
         return null;
     }
@@ -80,7 +104,6 @@ async function testPing() {
  * Tests download speed
  */
 async function testDownload(progressCallback) {
-    // Try each test server until one works
     for (const test of CONFIG.DOWNLOAD_TESTS) {
         try {
             const start = performance.now();
@@ -118,58 +141,59 @@ async function testDownload(progressCallback) {
         }
     }
     
-    // All servers failed
     return null;
 }
 
 /**
- * Tests upload speed
- * Note: Many public endpoints don't accept large uploads,
- * so we use a smaller test size
+ * Tests upload speed using generated random data
  */
 async function testUpload(progressCallback) {
-    // Create smaller random data (500KB for better compatibility)
-    const uploadSize = 500 * 1024;
-    const data = new Uint8Array(uploadSize);
-    crypto.getRandomValues(data);
-    
     const uploadEndpoints = [
         'https://httpbin.org/post',
         'https://postman-echo.com/post'
     ];
     
-    for (const endpoint of uploadEndpoints) {
-        try {
-            const start = performance.now();
-            
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                body: data,
-                cache: 'no-cache',
-                headers: {
-                    'Content-Type': 'application/octet-stream'
+    try {
+        // Generate random data in chunks
+        updateStatus('Preparing upload test...');
+        const data = generateRandomData(CONFIG.UPLOAD_SIZE);
+        
+        for (const endpoint of uploadEndpoints) {
+            try {
+                updateStatus('Testing upload speed...');
+                const start = performance.now();
+                
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    body: data,
+                    cache: 'no-cache',
+                    headers: {
+                        'Content-Type': 'application/octet-stream'
+                    }
+                });
+                
+                if (!response.ok) {
+                    console.warn(`Upload endpoint returned ${response.status}`);
+                    continue;
                 }
-            });
-            
-            if (!response.ok) {
-                console.warn(`Upload endpoint returned ${response.status}, trying next...`);
+                
+                const duration = (performance.now() - start) / 1000;
+                const bitsLoaded = CONFIG.UPLOAD_SIZE * 8;
+                const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
+                
+                progressCallback(100);
+                return speedMbps;
+                
+            } catch (error) {
+                console.warn('Upload test failed, trying next endpoint:', error);
                 continue;
             }
-            
-            const duration = (performance.now() - start) / 1000;
-            const bitsLoaded = uploadSize * 8;
-            const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
-            
-            progressCallback(100);
-            return speedMbps;
-            
-        } catch (error) {
-            console.warn('Upload test failed, trying next endpoint:', error);
-            continue;
         }
+        
+    } catch (error) {
+        console.error('Upload test preparation failed:', error);
     }
     
-    // All endpoints failed
     return null;
 }
 
@@ -255,7 +279,6 @@ async function runSpeedTest() {
         }
         
         // Step 3: Test Upload
-        updateStatus('Testing upload speed...');
         updateProgress(70);
         
         results.upload = await testUpload((progress) => {
@@ -285,7 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Log browser info for debugging
     console.log('Speed Test App loaded');
-    console.log('User Agent:', navigator.userAgent);
+    console.log('Browser:', navigator.userAgent);
     console.log('Online:', navigator.onLine);
 });
 
