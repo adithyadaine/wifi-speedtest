@@ -19,8 +19,7 @@ const CONFIG = {
             size: 10 * 1024 * 1024 // 10 MB
         }
     ],
-    // Reduced upload size to fit browser's crypto.getRandomValues limit
-    // Max recommended is 65536 bytes (64KB). Let's use that.
+    // Corrected upload size to fit browser's crypto.getRandomValues limit (64KB)
     UPLOAD_SIZE: 64 * 1024 // 64 KB
 };
 
@@ -128,7 +127,7 @@ async function testDownload(progressCallback) {
  * Tests upload speed using generated random data (within crypto limits)
  */
 async function testUpload(progressCallback) {
-    // Use a smaller size that fits the crypto.getRandomValues limit
+    // Use a size that fits the crypto.getRandomValues limit
     const data = new Uint8Array(CONFIG.UPLOAD_SIZE);
     crypto.getRandomValues(data); // This should now work without error
     
@@ -154,10 +153,6 @@ async function testUpload(progressCallback) {
                 console.warn(`Upload endpoint returned ${response.status} for ${endpoint}, trying next...`);
                 continue;
             }
-            
-            // For a basic test, we don't need to read the response body for upload
-            // const responseBody = await response.json(); 
-            // console.log('Upload response:', responseBody);
             
             const duration = (performance.now() - start) / 1000;
             const bitsLoaded = CONFIG.UPLOAD_SIZE * 8;
@@ -208,10 +203,13 @@ function showResults(results) {
     elements.download.textContent = results.download ? results.download.toFixed(2) : 'N/A';
     elements.upload.textContent = results.upload ? results.upload.toFixed(2) : 'N/A';
     
+    // Remove fade-in class before adding to ensure animation replays
+    elements.results.classList.remove('fade-in'); 
+
     setTimeout(() => {
         hideLoading();
-        elements.results.classList.add('fade-in');
         elements.results.style.display = 'block';
+        elements.results.classList.add('fade-in'); // Add class to trigger animation
     }, 300);
 }
 
@@ -266,8 +264,6 @@ async function runSpeedTest() {
         });
         
         if (results.upload === null) {
-            // Upload can sometimes be tricky or blocked by firewalls more easily.
-            // We'll show partial results if it fails, but not throw a full error.
             console.warn('Upload test failed, showing partial results...');
         }
         
