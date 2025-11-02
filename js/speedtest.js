@@ -18,8 +18,6 @@ const CONFIG = {
             size: 100 * 1024 * 1024
         }
     ],
-    // UPLOAD_SIZE is kept for potential future use or if upload is re-enabled,
-    // but the upload test function itself is no longer called.
     UPLOAD_SIZE: 64 * 1024, // 64 KB (Max safe for crypto.getRandomValues)
     NUM_DOWNLOAD_STREAMS: 4 // Number of parallel connections for download test
 };
@@ -37,22 +35,60 @@ const elements = {
     progress: document.getElementById('progress'),
     ping: document.getElementById('ping'),
     download: document.getElementById('download'),
-    // Removed direct reference to 'upload' as it's not displayed
     
-    // New elements for info section
+    // Info/Theme elements
     clientInfo: document.getElementById('clientInfo'),
-    serverInfo: document.getElementById('serverInfo')
+    serverInfo: document.getElementById('serverInfo'),
+    infoSection: document.getElementById('infoSection'),
+    toggleInfoButton: document.getElementById('toggleInfoButton'),
+    themeToggleButton: document.getElementById('themeToggleButton')
 };
+
+// =================================
+// Theme Management
+// =================================
+
+const THEME_KEY = 'speedtest-theme';
+
+/**
+ * Applies the specified theme to the document.
+ * @param {'light'|'dark'|'system'} theme - The theme to apply.
+ */
+function applyTheme(theme) {
+    const root = document.documentElement;
+    const body = document.body;
+    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    
+    body.classList.remove('light-theme', 'dark-theme'); // Clear previous
+    
+    if (theme === 'dark' || (theme === 'system' && systemPrefersDark)) {
+        body.classList.add('dark-theme');
+        elements.themeToggleButton.innerHTML = 
+            `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sun"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`; // Sun icon
+    } else {
+        body.classList.add('light-theme');
+        elements.themeToggleButton.innerHTML = 
+            `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-moon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`; // Moon icon
+    }
+    localStorage.setItem(THEME_KEY, theme);
+}
+
+/**
+ * Toggles the theme between light and dark.
+ */
+function toggleTheme() {
+    const currentTheme = localStorage.getItem(THEME_KEY) || 'system';
+    if (currentTheme === 'light') {
+        applyTheme('dark');
+    } else { // currentTheme is 'dark' or 'system'
+        applyTheme('light');
+    }
+}
 
 // =================================
 // Speed Test Functions
 // =================================
 
-/**
- * Tests the ping/latency to a server
- * Uses multiple attempts for accuracy
- * @returns {Promise<number|null>} Average ping time in milliseconds or null if all attempts fail.
- */
 async function testPing() {
     const attempts = 3;
     const pings = [];
@@ -60,7 +96,6 @@ async function testPing() {
     for (let i = 0; i < attempts; i++) {
         const start = performance.now();
         try {
-            // Using Cloudflare's /cdn-cgi/trace for a reliable, CORS-friendly ping
             await fetch('https://www.cloudflare.com/cdn-cgi/trace?t=' + Date.now(), {
                 method: 'GET',
                 cache: 'no-cache'
@@ -77,11 +112,6 @@ async function testPing() {
     return pings.reduce((a, b) => a + b, 0) / pings.length;
 }
 
-/**
- * Tests download speed using multiple parallel connections.
- * @param {Function} progressCallback - Callback to update progress (0-100%).
- * @returns {Promise<number|null>} Download speed in Mbps or null if all tests fail.
- */
 async function testDownload(progressCallback) {
     for (const test of CONFIG.DOWNLOAD_TESTS) {
         try {
@@ -89,10 +119,8 @@ async function testDownload(progressCallback) {
             const downloadPromises = [];
             let completedStreams = 0;
 
-            // Start multiple download streams
             for (let i = 0; i < CONFIG.NUM_DOWNLOAD_STREAMS; i++) {
                 downloadPromises.push((async () => {
-                    // Append unique query params to prevent caching and differentiate streams
                     const response = await fetch(
                         test.url + `&t=${Date.now()}&p=${i}`, 
                         { cache: 'no-cache' }
@@ -100,18 +128,16 @@ async function testDownload(progressCallback) {
                     if (!response.ok) {
                         throw new Error(`Stream ${i} failed with status ${response.status}`);
                     }
-                    // Read the entire body to ensure all data is received for timing
                     await response.arrayBuffer(); 
                     
                     completedStreams++;
-                    // Basic progress: update when a stream completes
                     progressCallback((completedStreams / CONFIG.NUM_DOWNLOAD_STREAMS) * 100);
                     
-                    return test.size; // Return the expected size for calculation
+                    return test.size; 
                 })());
             }
 
-            const results = await Promise.allSettled(downloadPromises); // Wait for all streams to settle
+            const results = await Promise.allSettled(downloadPromises); 
             let totalReceivedBytes = 0;
             let successStreams = 0;
 
@@ -136,63 +162,43 @@ async function testDownload(progressCallback) {
 
         } catch (error) {
             console.warn(`Parallel download test failed for ${test.url}, trying next server:`, error);
-            continue; // Try the next download test URL if current one fails
+            continue;
         }
     }
-    return null; // All download tests failed
+    return null;
 }
 
 // =================================
 // UI Helper Functions
 // =================================
 
-/**
- * Updates the visual progress bar width.
- * @param {number} percentage - Percentage from 0 to 100.
- */
 function updateProgress(percentage) {
     elements.progress.style.width = `${percentage}%`;
 }
 
-/**
- * Updates the status message displayed below the progress bar.
- * @param {string} message - The status message.
- */
 function updateStatus(message) {
     elements.status.textContent = message;
 }
 
-/**
- * Sets the UI to the loading state.
- */
 function showLoading() {
     elements.results.style.display = 'none';
     elements.error.style.display = 'none';
+    elements.infoSection.style.display = 'none'; // Hide info when loading
     elements.loading.style.display = 'block';
     elements.startButton.disabled = true;
     elements.startButton.textContent = 'Testing...';
     updateProgress(0);
 }
 
-/**
- * Hides the loading state and re-enables the start button.
- */
 function hideLoading() {
     elements.loading.style.display = 'none';
     elements.startButton.disabled = false;
     elements.startButton.textContent = 'Start Test';
 }
 
-/**
- * Displays the test results.
- * @param {Object} results - Object containing ping, download, and upload results.
- */
 function showResults(results) {
     elements.ping.textContent = results.ping ? results.ping.toFixed(0) : 'N/A';
     elements.download.textContent = results.download ? results.download.toFixed(2) : 'N/A';
-    // Upload is intentionally 'N/A' as the test is disabled
-    // If the HTML element was present, its content would be set by this line:
-    // elements.upload.textContent = results.upload ? results.upload.toFixed(2) : 'N/A';
     
     // Ensure fade-in animation restarts
     elements.results.classList.remove('fade-in'); 
@@ -204,10 +210,6 @@ function showResults(results) {
     }, 300);
 }
 
-/**
- * Displays an error message to the user.
- * @param {string} message - The error message.
- */
 function showError(message) {
     hideLoading();
     elements.error.textContent = `${message}. Please check your internet connection and try again.`;
@@ -218,16 +220,13 @@ function showError(message) {
 // Main Test Function
 // =================================
 
-/**
- * Orchestrates the entire speed test process.
- */
 async function runSpeedTest() {
     showLoading();
     
     const results = {
         ping: null,
         download: null,
-        upload: null // Explicitly null as upload test is disabled
+        upload: null 
     };
     
     try {
@@ -277,11 +276,23 @@ async function runSpeedTest() {
 }
 
 // =================================
-// Event Listeners
+// Event Listeners and Initializers
 // =================================
 
 document.addEventListener('DOMContentLoaded', () => {
     elements.startButton.addEventListener('click', runSpeedTest);
+    
+    // Toggle Info Section
+    elements.toggleInfoButton.addEventListener('click', () => {
+        elements.infoSection.classList.toggle('show');
+    });
+
+    // Theme Toggle
+    elements.themeToggleButton.addEventListener('click', toggleTheme);
+    
+    // Initialize theme on load
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    applyTheme(savedTheme || 'system'); // Use saved theme or system default
     
     // Display client info (User Agent) when the page loads
     elements.clientInfo.textContent = navigator.userAgent;
@@ -297,4 +308,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // Provides feedback if the user's browser goes offline
 window.addEventListener('offline', () => {
     showError('No internet connection detected');
+});
+
+// Listen for system theme changes
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+    if (localStorage.getItem(THEME_KEY) === 'system') {
+        applyTheme('system'); // Re-apply system theme
+    }
 });
