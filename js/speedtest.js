@@ -1,6 +1,6 @@
 /**
  * WiFi Speed Test Application
- * Tests download speed, upload speed, and latency
+ * Tests download speed and latency (upload disabled due to accuracy limitations)
  */
 
 // =================================
@@ -18,7 +18,9 @@ const CONFIG = {
             size: 100 * 1024 * 1024
         }
     ],
-    UPLOAD_SIZE: 64 * 1024, // 64 KB
+    // UPLOAD_SIZE is kept for potential future use or if upload is re-enabled,
+    // but the upload test function itself is no longer called.
+    UPLOAD_SIZE: 64 * 1024, // 64 KB (Max safe for crypto.getRandomValues)
     NUM_DOWNLOAD_STREAMS: 4 // Number of parallel connections for download test
 };
 
@@ -35,7 +37,11 @@ const elements = {
     progress: document.getElementById('progress'),
     ping: document.getElementById('ping'),
     download: document.getElementById('download'),
-    upload: document.getElementById('upload')
+    // Removed direct reference to 'upload' as it's not displayed
+    
+    // New elements for info section
+    clientInfo: document.getElementById('clientInfo'),
+    serverInfo: document.getElementById('serverInfo')
 };
 
 // =================================
@@ -45,6 +51,7 @@ const elements = {
 /**
  * Tests the ping/latency to a server
  * Uses multiple attempts for accuracy
+ * @returns {Promise<number|null>} Average ping time in milliseconds or null if all attempts fail.
  */
 async function testPing() {
     const attempts = 3;
@@ -53,6 +60,7 @@ async function testPing() {
     for (let i = 0; i < attempts; i++) {
         const start = performance.now();
         try {
+            // Using Cloudflare's /cdn-cgi/trace for a reliable, CORS-friendly ping
             await fetch('https://www.cloudflare.com/cdn-cgi/trace?t=' + Date.now(), {
                 method: 'GET',
                 cache: 'no-cache'
@@ -70,7 +78,9 @@ async function testPing() {
 }
 
 /**
- * Tests download speed using multiple parallel connections
+ * Tests download speed using multiple parallel connections.
+ * @param {Function} progressCallback - Callback to update progress (0-100%).
+ * @returns {Promise<number|null>} Download speed in Mbps or null if all tests fail.
  */
 async function testDownload(progressCallback) {
     for (const test of CONFIG.DOWNLOAD_TESTS) {
@@ -82,15 +92,16 @@ async function testDownload(progressCallback) {
             // Start multiple download streams
             for (let i = 0; i < CONFIG.NUM_DOWNLOAD_STREAMS; i++) {
                 downloadPromises.push((async () => {
+                    // Append unique query params to prevent caching and differentiate streams
                     const response = await fetch(
-                        test.url + `&t=${Date.now()}&p=${i}`, // Unique param for each stream
+                        test.url + `&t=${Date.now()}&p=${i}`, 
                         { cache: 'no-cache' }
                     );
                     if (!response.ok) {
                         throw new Error(`Stream ${i} failed with status ${response.status}`);
                     }
-                    // We don't need to read the full body for byte length as we know the total size per stream
-                    await response.arrayBuffer(); // Just read to completion
+                    // Read the entire body to ensure all data is received for timing
+                    await response.arrayBuffer(); 
                     
                     completedStreams++;
                     // Basic progress: update when a stream completes
@@ -100,7 +111,7 @@ async function testDownload(progressCallback) {
                 })());
             }
 
-            const results = await Promise.allSettled(downloadPromises); // Wait for all streams
+            const results = await Promise.allSettled(downloadPromises); // Wait for all streams to settle
             let totalReceivedBytes = 0;
             let successStreams = 0;
 
@@ -118,7 +129,6 @@ async function testDownload(progressCallback) {
             }
 
             const duration = (performance.now() - start) / 1000;
-            // Calculate speed based on successfully received bytes
             const bitsLoaded = totalReceivedBytes * 8;
             const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
 
@@ -126,69 +136,35 @@ async function testDownload(progressCallback) {
 
         } catch (error) {
             console.warn(`Parallel download test failed for ${test.url}, trying next server:`, error);
-            continue;
+            continue; // Try the next download test URL if current one fails
         }
     }
-    return null;
-}
-
-/**
- * Tests upload speed using generated random data (within crypto limits)
- */
-async function testUpload(progressCallback) {
-    const data = new Uint8Array(CONFIG.UPLOAD_SIZE);
-    crypto.getRandomValues(data);
-    
-    const uploadEndpoints = [
-        'https://httpbin.org/post',
-        'https://postman-echo.com/post'
-    ];
-    
-    for (const endpoint of uploadEndpoints) {
-        try {
-            const start = performance.now();
-            
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                body: data,
-                cache: 'no-cache',
-                headers: {
-                    'Content-Type': 'application/octet-stream'
-                }
-            });
-            
-            if (!response.ok) {
-                console.warn(`Upload endpoint returned ${response.status} for ${endpoint}`);
-                continue;
-            }
-            
-            const duration = (performance.now() - start) / 1000;
-            const bitsLoaded = CONFIG.UPLOAD_SIZE * 8;
-            const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
-            
-            progressCallback(100);
-            return speedMbps;
-            
-        } catch (error) {
-            console.warn(`Upload test failed for ${endpoint}, trying next endpoint:`, error);
-            continue;
-        }
-    }
-    return null;
+    return null; // All download tests failed
 }
 
 // =================================
 // UI Helper Functions
 // =================================
 
+/**
+ * Updates the visual progress bar width.
+ * @param {number} percentage - Percentage from 0 to 100.
+ */
 function updateProgress(percentage) {
     elements.progress.style.width = `${percentage}%`;
 }
 
+/**
+ * Updates the status message displayed below the progress bar.
+ * @param {string} message - The status message.
+ */
 function updateStatus(message) {
     elements.status.textContent = message;
 }
 
+/**
+ * Sets the UI to the loading state.
+ */
 function showLoading() {
     elements.results.style.display = 'none';
     elements.error.style.display = 'none';
@@ -198,17 +174,27 @@ function showLoading() {
     updateProgress(0);
 }
 
+/**
+ * Hides the loading state and re-enables the start button.
+ */
 function hideLoading() {
     elements.loading.style.display = 'none';
     elements.startButton.disabled = false;
     elements.startButton.textContent = 'Start Test';
 }
 
+/**
+ * Displays the test results.
+ * @param {Object} results - Object containing ping, download, and upload results.
+ */
 function showResults(results) {
     elements.ping.textContent = results.ping ? results.ping.toFixed(0) : 'N/A';
     elements.download.textContent = results.download ? results.download.toFixed(2) : 'N/A';
-    elements.upload.textContent = results.upload ? results.upload.toFixed(2) : 'N/A';
+    // Upload is intentionally 'N/A' as the test is disabled
+    // If the HTML element was present, its content would be set by this line:
+    // elements.upload.textContent = results.upload ? results.upload.toFixed(2) : 'N/A';
     
+    // Ensure fade-in animation restarts
     elements.results.classList.remove('fade-in'); 
 
     setTimeout(() => {
@@ -218,6 +204,10 @@ function showResults(results) {
     }, 300);
 }
 
+/**
+ * Displays an error message to the user.
+ * @param {string} message - The error message.
+ */
 function showError(message) {
     hideLoading();
     elements.error.textContent = `${message}. Please check your internet connection and try again.`;
@@ -228,13 +218,16 @@ function showError(message) {
 // Main Test Function
 // =================================
 
+/**
+ * Orchestrates the entire speed test process.
+ */
 async function runSpeedTest() {
     showLoading();
     
     const results = {
         ping: null,
         download: null,
-        upload: null
+        upload: null // Explicitly null as upload test is disabled
     };
     
     try {
@@ -252,8 +245,16 @@ async function runSpeedTest() {
         updateStatus('Testing download speed...');
         updateProgress(20);
         
+        // Extract and display the hostname of the primary download test server
+        try {
+            const downloadTestUrl = new URL(CONFIG.DOWNLOAD_TESTS[0].url);
+            elements.serverInfo.textContent = downloadTestUrl.hostname;
+        } catch (e) {
+            console.error('Failed to parse download test URL for server info:', e);
+            elements.serverInfo.textContent = "Unknown";
+        }
+
         results.download = await testDownload((progress) => {
-            // Adjust progress based on number of streams
             updateProgress(20 + (progress * 0.5));
         });
         
@@ -261,19 +262,11 @@ async function runSpeedTest() {
             throw new Error('Download test failed - unable to reach test servers or all streams failed.');
         }
         
-        // Step 3: Test Upload
-        updateStatus('Testing upload speed...');
-        updateProgress(70);
+        // Step 3: Upload test is explicitly disabled due to browser accuracy limitations
+        results.upload = null; 
+        console.warn('Upload test is currently disabled due to browser accuracy limitations.');
         
-        results.upload = await testUpload((progress) => {
-            updateProgress(70 + (progress * 0.3));
-        });
-        
-        if (results.upload === null) {
-            console.warn('Upload test failed, showing partial results...');
-        }
-        
-        // Show results (even if some tests failed)
+        // Show results (even if some tests failed or were skipped)
         updateProgress(100);
         showResults(results);
         
@@ -290,11 +283,18 @@ async function runSpeedTest() {
 document.addEventListener('DOMContentLoaded', () => {
     elements.startButton.addEventListener('click', runSpeedTest);
     
+    // Display client info (User Agent) when the page loads
+    elements.clientInfo.textContent = navigator.userAgent;
+    
+    // Set initial server info until a test is run
+    elements.serverInfo.textContent = "Not yet tested";
+    
     console.log('Speed Test App loaded');
     console.log('Browser:', navigator.userAgent);
     console.log('Online:', navigator.onLine);
 });
 
+// Provides feedback if the user's browser goes offline
 window.addEventListener('offline', () => {
     showError('No internet connection detected');
 });
