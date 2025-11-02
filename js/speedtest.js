@@ -8,18 +8,16 @@
 // =================================
 
 const CONFIG = {
-    // Use test files from CORS-friendly servers
     DOWNLOAD_TESTS: [
         {
-            url: 'https://speed.cloudflare.com/__down?bytes=10000000',
-            size: 10 * 1024 * 1024 // 10 MB
+            url: 'https://speed.cloudflare.com/__down?bytes=50000000', // 50 MB
+            size: 50 * 1024 * 1024
         },
         {
-            url: 'https://proof.ovh.net/files/10Mb.dat',
-            size: 10 * 1024 * 1024 // 10 MB
+            url: 'https://proof.ovh.net/files/100Mb.dat', // 100 MB
+            size: 100 * 1024 * 1024
         }
     ],
-    // Corrected upload size to fit browser's crypto.getRandomValues limit (64KB)
     UPLOAD_SIZE: 64 * 1024 // 64 KB
 };
 
