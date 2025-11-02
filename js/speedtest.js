@@ -55,32 +55,39 @@ const THEME_KEY = 'speedtest-theme';
  * @param {'light'|'dark'|'system'} theme - The theme to apply.
  */
 function applyTheme(theme) {
-    const root = document.documentElement;
     const body = document.body;
     const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    let effectiveTheme = theme;
     
-    body.classList.remove('light-theme', 'dark-theme'); // Clear previous
+    if (theme === 'system') {
+        effectiveTheme = systemPrefersDark ? 'dark' : 'light';
+    }
     
-    if (theme === 'dark' || (theme === 'system' && systemPrefersDark)) {
+    body.classList.remove('light-theme', 'dark-theme');
+    if (effectiveTheme === 'dark') {
         body.classList.add('dark-theme');
+        // Update icon to sun
         elements.themeToggleButton.innerHTML = 
-            `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sun"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`; // Sun icon
+            `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sun"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`; 
     } else {
         body.classList.add('light-theme');
+        // Update icon to moon
         elements.themeToggleButton.innerHTML = 
-            `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-moon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`; // Moon icon
+            `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-moon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`;
     }
     localStorage.setItem(THEME_KEY, theme);
 }
 
 /**
- * Toggles the theme between light and dark.
+ * Toggles the theme between light and dark, respecting system preference if set.
  */
 function toggleTheme() {
-    const currentTheme = localStorage.getItem(THEME_KEY) || 'system';
-    if (currentTheme === 'light') {
+    const currentStoredTheme = localStorage.getItem(THEME_KEY);
+    if (currentStoredTheme === 'light') {
         applyTheme('dark');
-    } else { // currentTheme is 'dark' or 'system'
+    } else if (currentStoredTheme === 'dark') {
+        applyTheme('system'); // Next toggle reverts to system preference
+    } else { // currentStoredTheme is 'system' or null (no preference yet)
         applyTheme('light');
     }
 }
@@ -183,7 +190,7 @@ function updateStatus(message) {
 function showLoading() {
     elements.results.style.display = 'none';
     elements.error.style.display = 'none';
-    elements.infoSection.style.display = 'none'; // Hide info when loading
+    elements.infoSection.classList.remove('show'); // Hide info section explicitly
     elements.loading.style.display = 'block';
     elements.startButton.disabled = true;
     elements.startButton.textContent = 'Testing...';
@@ -200,7 +207,6 @@ function showResults(results) {
     elements.ping.textContent = results.ping ? results.ping.toFixed(0) : 'N/A';
     elements.download.textContent = results.download ? results.download.toFixed(2) : 'N/A';
     
-    // Ensure fade-in animation restarts
     elements.results.classList.remove('fade-in'); 
 
     setTimeout(() => {
@@ -244,7 +250,6 @@ async function runSpeedTest() {
         updateStatus('Testing download speed...');
         updateProgress(20);
         
-        // Extract and display the hostname of the primary download test server
         try {
             const downloadTestUrl = new URL(CONFIG.DOWNLOAD_TESTS[0].url);
             elements.serverInfo.textContent = downloadTestUrl.hostname;
@@ -310,8 +315,8 @@ window.addEventListener('offline', () => {
     showError('No internet connection detected');
 });
 
-// Listen for system theme changes
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+// Listen for system theme changes and update if 'system' is chosen
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if (localStorage.getItem(THEME_KEY) === 'system') {
         applyTheme('system'); // Re-apply system theme
     }
