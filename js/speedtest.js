@@ -14,11 +14,12 @@ const CONFIG = {
             size: 50 * 1024 * 1024
         },
         {
-            url: 'https://proof.ovh.net/files/100Mb.dat', // 100 MB
+            url: 'https://proof.ovh.net/files/100Mb.dat', // 100 MB (fallback)
             size: 100 * 1024 * 1024
         }
     ],
-    UPLOAD_SIZE: 64 * 1024 // 64 KB
+    UPLOAD_SIZE: 64 * 1024, // 64 KB
+    NUM_DOWNLOAD_STREAMS: 4 // Number of parallel connections for download test
 };
 
 // =================================
@@ -51,73 +52,83 @@ async function testPing() {
     
     for (let i = 0; i < attempts; i++) {
         const start = performance.now();
-        
         try {
-            // Use fetch with a unique query param to prevent caching
             await fetch('https://www.cloudflare.com/cdn-cgi/trace?t=' + Date.now(), {
                 method: 'GET',
                 cache: 'no-cache'
             });
-            
             const ping = performance.now() - start;
             pings.push(ping);
         } catch (error) {
             console.warn(`Ping attempt ${i + 1} failed:`, error);
         }
     }
-    
-    // Return average ping, or null if all failed
     if (pings.length === 0) {
         return null;
     }
-    
     return pings.reduce((a, b) => a + b, 0) / pings.length;
 }
 
 /**
- * Tests download speed
+ * Tests download speed using multiple parallel connections
  */
 async function testDownload(progressCallback) {
-    // Try each test server until one works
     for (const test of CONFIG.DOWNLOAD_TESTS) {
         try {
             const start = performance.now();
-            // Add unique query param to prevent caching
-            const response = await fetch(test.url + '&t=' + Date.now(), {
-                cache: 'no-cache'
-            });
-            
-            if (!response.ok) {
-                console.warn(`Server returned ${response.status} for ${test.url}, trying next...`);
-                continue;
+            const downloadPromises = [];
+            let completedStreams = 0;
+
+            // Start multiple download streams
+            for (let i = 0; i < CONFIG.NUM_DOWNLOAD_STREAMS; i++) {
+                downloadPromises.push((async () => {
+                    const response = await fetch(
+                        test.url + `&t=${Date.now()}&p=${i}`, // Unique param for each stream
+                        { cache: 'no-cache' }
+                    );
+                    if (!response.ok) {
+                        throw new Error(`Stream ${i} failed with status ${response.status}`);
+                    }
+                    // We don't need to read the full body for byte length as we know the total size per stream
+                    await response.arrayBuffer(); // Just read to completion
+                    
+                    completedStreams++;
+                    // Basic progress: update when a stream completes
+                    progressCallback((completedStreams / CONFIG.NUM_DOWNLOAD_STREAMS) * 100);
+                    
+                    return test.size; // Return the expected size for calculation
+                })());
+            }
+
+            const results = await Promise.allSettled(downloadPromises); // Wait for all streams
+            let totalReceivedBytes = 0;
+            let successStreams = 0;
+
+            for (const result of results) {
+                if (result.status === 'fulfilled') {
+                    totalReceivedBytes += result.value;
+                    successStreams++;
+                } else {
+                    console.warn('One download stream failed:', result.reason);
+                }
             }
             
-            const reader = response.body.getReader();
-            let receivedLength = 0;
-            
-            while (true) {
-                const { done, value } = await reader.read();
-                
-                if (done) break;
-                
-                receivedLength += value.length;
-                const progress = (receivedLength / test.size) * 100;
-                progressCallback(Math.min(progress, 100));
+            if (successStreams === 0) {
+                throw new Error('All download streams failed.');
             }
-            
+
             const duration = (performance.now() - start) / 1000;
-            const bitsLoaded = receivedLength * 8;
+            // Calculate speed based on successfully received bytes
+            const bitsLoaded = totalReceivedBytes * 8;
             const speedMbps = (bitsLoaded / duration) / (1024 * 1024);
-            
+
             return speedMbps;
-            
+
         } catch (error) {
-            console.warn(`Download test failed for ${test.url}, trying next server:`, error);
+            console.warn(`Parallel download test failed for ${test.url}, trying next server:`, error);
             continue;
         }
     }
-    
-    // All servers failed
     return null;
 }
 
@@ -125,9 +136,8 @@ async function testDownload(progressCallback) {
  * Tests upload speed using generated random data (within crypto limits)
  */
 async function testUpload(progressCallback) {
-    // Use a size that fits the crypto.getRandomValues limit
     const data = new Uint8Array(CONFIG.UPLOAD_SIZE);
-    crypto.getRandomValues(data); // This should now work without error
+    crypto.getRandomValues(data);
     
     const uploadEndpoints = [
         'https://httpbin.org/post',
@@ -148,7 +158,7 @@ async function testUpload(progressCallback) {
             });
             
             if (!response.ok) {
-                console.warn(`Upload endpoint returned ${response.status} for ${endpoint}, trying next...`);
+                console.warn(`Upload endpoint returned ${response.status} for ${endpoint}`);
                 continue;
             }
             
@@ -164,8 +174,6 @@ async function testUpload(progressCallback) {
             continue;
         }
     }
-    
-    // All endpoints failed
     return null;
 }
 
@@ -201,13 +209,12 @@ function showResults(results) {
     elements.download.textContent = results.download ? results.download.toFixed(2) : 'N/A';
     elements.upload.textContent = results.upload ? results.upload.toFixed(2) : 'N/A';
     
-    // Remove fade-in class before adding to ensure animation replays
     elements.results.classList.remove('fade-in'); 
 
     setTimeout(() => {
         hideLoading();
         elements.results.style.display = 'block';
-        elements.results.classList.add('fade-in'); // Add class to trigger animation
+        elements.results.classList.add('fade-in'); 
     }, 300);
 }
 
@@ -246,11 +253,12 @@ async function runSpeedTest() {
         updateProgress(20);
         
         results.download = await testDownload((progress) => {
+            // Adjust progress based on number of streams
             updateProgress(20 + (progress * 0.5));
         });
         
         if (results.download === null) {
-            throw new Error('Download test failed - unable to reach test servers');
+            throw new Error('Download test failed - unable to reach test servers or all streams failed.');
         }
         
         // Step 3: Test Upload
@@ -282,13 +290,11 @@ async function runSpeedTest() {
 document.addEventListener('DOMContentLoaded', () => {
     elements.startButton.addEventListener('click', runSpeedTest);
     
-    // Log browser info for debugging
     console.log('Speed Test App loaded');
     console.log('Browser:', navigator.userAgent);
     console.log('Online:', navigator.onLine);
 });
 
-// Handle offline detection
 window.addEventListener('offline', () => {
     showError('No internet connection detected');
 });
